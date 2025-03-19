@@ -1,0 +1,17 @@
+/* src/App.css */
+.App {
+ text-align: center;
+}
+
+/* src/Chat.css */
+#chat-container {
+ display: flex;
+ flex-direction: column;
+ align-items: center;
+}
+#configuration {
+ background-color: white;
+ padding: 10px;
+ margin-bottom: 20px;
+ width: 500px;
+}

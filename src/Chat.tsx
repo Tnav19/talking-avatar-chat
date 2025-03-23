@@ -339,16 +339,114 @@ const Chat: React.FC<ChatProps> = () => {
     xhr.send();
   };
 
+  const handleVideoTrack = (event: RTCTrackEvent): void => {
+    if (event.track.kind === 'audio') {
+      let audioElement = document.createElement('audio');
+      audioElement.id = 'audioPlayer';
+      audioElement.srcObject = event.streams[0];
+      audioElement.autoplay = true;
+
+      audioElement.onplaying = () => {
+        console.log(`WebRTC ${event.track.kind} channel connected.`);
+      };
+
+      // Clean up existing audio element if there is any
+      const remoteVideo = document.getElementById('remoteVideo');
+      if (remoteVideo) {
+        for (let i = 0; i < remoteVideo.childNodes.length; i++) {
+          if ((remoteVideo.childNodes[i] as HTMLElement).localName === event.track.kind) {
+            remoteVideo.removeChild(remoteVideo.childNodes[i]);
+          }
+        }
+        remoteVideo.appendChild(audioElement);
+      }
+    }
+
+    if (event.track.kind === 'video') {
+      let videoElement = document.createElement('video');
+      videoElement.id = 'videoPlayer';
+      videoElement.srcObject = event.streams[0];
+      videoElement.autoplay = true;
+      videoElement.playsInline = true;
+
+      videoElement.onplaying = () => {
+        // Clean up existing video element if there is any
+        const remoteVideo = document.getElementById('remoteVideo');
+        if (remoteVideo) {
+          for (let i = 0; i < remoteVideo.childNodes.length; i++) {
+            if ((remoteVideo.childNodes[i] as HTMLElement).localName === event.track.kind) {
+              remoteVideo.removeChild(remoteVideo.childNodes[i]);
+            }
+          }
+          remoteVideo.appendChild(videoElement);
+        }
+
+        console.log(`WebRTC ${event.track.kind} channel connected.`);
+        setIsMicrophoneDisabled(false);
+        setSessionActive(true);
+        
+        if (useLocalVideoForIdle) {
+          setShowLocalVideo(false);
+          if (!lastSpeakTime) {
+            setLastSpeakTime(new Date());
+          }
+        }
+
+        setIsReconnecting(false);
+        // Set session active after 5 seconds
+        setTimeout(() => {
+          setSessionActive(true);
+        }, 5000);
+      };
+    }
+  };
+
   const setupWebRTC = (iceServerUrl: string, iceServerUsername: string, iceServerCredential: string): void => {
     const peerConnection = new RTCPeerConnection({
       iceServers: [{ urls: [iceServerUrl], username: iceServerUsername, credential: iceServerCredential }],
     });
 
-    peerConnection.ontrack = (event: RTCTrackEvent) => {
-      if (event.track.kind === 'video') {
-        handleVideoTrack(event);
-      }
-    };
+    peerConnection.ontrack = handleVideoTrack;
+
+    // Listen to data channel, to get the event from the server
+    peerConnection.addEventListener("datachannel", (event) => {
+      const dataChannel = event.channel;
+      dataChannel.onmessage = (e) => {
+        const webRTCEvent = JSON.parse(e.data);
+        if (webRTCEvent.event.eventType === 'EVENT_TYPE_TURN_START' && showSubtitles) {
+          // Handle subtitles
+          const subtitles = document.getElementById('subtitles');
+          if (subtitles) {
+            subtitles.hidden = false;
+            // We should maintain speaking text state if needed
+            // subtitles.innerHTML = speakingText;
+          }
+        } else if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END' || webRTCEvent.event.eventType === 'EVENT_TYPE_SWITCH_TO_IDLE') {
+          const subtitles = document.getElementById('subtitles');
+          if (subtitles) {
+            subtitles.hidden = true;
+          }
+          
+          if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END') {
+            if (autoReconnectAvatar && !userClosedSession && !isReconnecting) {
+              // Session disconnected unexpectedly, need reconnect
+              console.log(`[${new Date().toISOString()}] The WebSockets got disconnected, need reconnect.`);
+              setIsReconnecting(true);
+
+              // Release the existing avatar connection
+              if (avatarSynthesizerRef.current) {
+                avatarSynthesizerRef.current.close();
+              }
+
+              // Setup a new avatar connection
+              connectAvatar();
+            }
+          }
+        }
+
+        console.log(`[${new Date().toISOString()}] WebRTC event received: ${e.data}`);
+      };
+    });
 
     peerConnection.addTransceiver('video', { direction: 'sendrecv' });
     peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
@@ -360,18 +458,6 @@ const Chat: React.FC<ChatProps> = () => {
         console.error(`Error starting avatar: ${result.resultId}`);
       }
     });
-  };
-
-  const handleVideoTrack = (event: RTCTrackEvent): void => {
-    let videoElement = document.createElement('video');
-    videoElement.srcObject = event.streams[0];
-    videoElement.autoplay = true;
-    videoElement.playsInline = true;
-
-    const remoteVideo = document.getElementById('remoteVideo');
-    if (remoteVideo) {
-      remoteVideo.appendChild(videoElement);
-    }
   };
 
   const stopSpeaking = (): void => {

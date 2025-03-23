@@ -52,6 +52,10 @@ const Chat: React.FC<ChatProps> = () => {
   const [showRemoteVideo, setShowRemoteVideo] = useState<boolean>(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [systemPrompt, setSystemPrompt] = useState<string>("You are an AI assistant that helps people find information.");
+  const [speakingText, setSpeakingText] = useState<string>("");
+  const [spokenTextQueue, setSpokenTextQueue] = useState<string[]>([]);
+  const [repeatSpeakingSentenceAfterReconnection, setRepeatSpeakingSentenceAfterReconnection] = useState<boolean>(true);
+  const [currentRecognizedText, setCurrentRecognizedText] = useState<string>("");
   
   // Refs
   const chatHistoryRef = useRef<HTMLDivElement>(null);
@@ -187,6 +191,15 @@ const Chat: React.FC<ChatProps> = () => {
         () => {
           setMicrophoneText('Start Microphone');
           setIsMicrophoneDisabled(false);
+          // When stopping microphone, ensure the type message is shown and populated
+          if (currentRecognizedText.trim()) {
+            setShowTypeMessage(true);
+            setUserMessage(currentRecognizedText);
+            // Focus the text area
+            if (userMessageRef.current) {
+              userMessageRef.current.focus();
+            }
+          }
         },
         (err) => {
           console.log("Failed to stop continuous recognition:", err);
@@ -208,11 +221,33 @@ const Chat: React.FC<ChatProps> = () => {
     }
 
     setIsMicrophoneDisabled(true);
+    setCurrentRecognizedText("");
+    // Clear the message input when starting microphone
+    setUserMessage("");
     
+    // Handle recognizing event for real-time transcription
+    speechRecognizerRef.current.recognizing = (s: any, e: SpeechSDK.SpeechRecognitionEventArgs) => {
+      if (e.result.reason === SpeechSDK.ResultReason.RecognizingSpeech) {
+        const text = e.result.text;
+        if (text.trim() !== '') {
+          // Update real-time transcription
+          setCurrentRecognizedText(text);
+          // Always show and update the type message during recognition
+          setShowTypeMessage(true);
+          setUserMessage(text);
+        }
+      }
+    };
+    
+    // Handle recognized event for final results
     speechRecognizerRef.current.recognized = async (s: any, e: SpeechSDK.SpeechRecognitionEventArgs) => {
       if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
         let userQuery = e.result.text.trim();
         if (userQuery === '') return;
+
+        setCurrentRecognizedText(userQuery);
+        setShowTypeMessage(true);
+        setUserMessage(userQuery);
 
         if (!continuousConversation) {
           setIsMicrophoneDisabled(true);
@@ -221,6 +256,10 @@ const Chat: React.FC<ChatProps> = () => {
               () => {
                 setMicrophoneText('Start Microphone');
                 setIsMicrophoneDisabled(false);
+                // Focus the text area after recognition stops
+                if (userMessageRef.current) {
+                  userMessageRef.current.focus();
+                }
               },
               (err) => {
                 console.log("Failed to stop continuous recognition:", err);
@@ -238,6 +277,8 @@ const Chat: React.FC<ChatProps> = () => {
       () => {
         setMicrophoneText('Stop Microphone');
         setIsMicrophoneDisabled(false);
+        // Show the type message area when starting recognition
+        setShowTypeMessage(true);
       },
       (err) => {
         console.log("Failed to start continuous recognition:", err);
@@ -397,6 +438,17 @@ const Chat: React.FC<ChatProps> = () => {
         setTimeout(() => {
           setSessionActive(true);
         }, 5000);
+
+        // Continue speaking if there are unfinished sentences
+        if (repeatSpeakingSentenceAfterReconnection) {
+          if (speakingText !== '') {
+            speakNext(speakingText, 0, true);
+          }
+        } else {
+          if (spokenTextQueue.length > 0) {
+            speakNext(spokenTextQueue[0]);
+          }
+        }
       };
     }
   };
@@ -460,10 +512,55 @@ const Chat: React.FC<ChatProps> = () => {
     });
   };
 
-  const stopSpeaking = (): void => {
-    avatarSynthesizerRef.current?.stopSpeakingAsync().then(() => {
+  const speakNext = async (text: string, index: number = 0, isReconnect: boolean = false) => {
+    if (!avatarSynthesizerRef.current) return;
+
+    setSpeakingText(text);
+    setIsSpeaking(true);
+
+    try {
+      const ssml = `
+        <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US">
+          <voice name="${ttsVoice}">
+            <mstts:express-as style="chat">
+              ${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+            </mstts:express-as>
+          </voice>
+        </speak>`;
+
+      await avatarSynthesizerRef.current.speakSsmlAsync(ssml);
+      
+      if (!isReconnect) {
+        setSpokenTextQueue(prev => [...prev, text]);
+      }
+      
       setIsSpeaking(false);
-    });
+      setSpeakingText("");
+      setLastSpeakTime(new Date());
+
+      // If there are more items in the queue, speak the next one
+      if (spokenTextQueue.length > index + 1) {
+        speakNext(spokenTextQueue[index + 1], index + 1);
+      }
+    } catch (error) {
+      console.error('Error speaking:', error);
+      setIsSpeaking(false);
+      setSpeakingText("");
+    }
+  };
+
+  const stopSpeaking = async (): Promise<void> => {
+    if (!avatarSynthesizerRef.current) return;
+    
+    try {
+      await avatarSynthesizerRef.current.stopSpeakingAsync();
+      setIsSpeaking(false);
+      setSpeakingText("");
+      // Clear the queue when stopping
+      setSpokenTextQueue([]);
+    } catch (error) {
+      console.error('Error stopping speech:', error);
+    }
   };
 
   const startSession = (): void => {

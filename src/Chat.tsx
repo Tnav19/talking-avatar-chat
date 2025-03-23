@@ -191,7 +191,7 @@ const Chat: React.FC<ChatProps> = () => {
     setSessionActive(false);
   };
 
-  const handleMicrophoneClick = () => {
+  const handleMicrophoneClick = async () => {
     if (!speechRecognizerRef.current) return;
     
     if (microphoneText === 'Stop Microphone') {
@@ -216,6 +216,11 @@ const Chat: React.FC<ChatProps> = () => {
         }
       );
       return;
+    }
+
+    // Stop avatar speaking if it's currently speaking
+    if (isSpeaking) {
+      await stopSpeaking();
     }
 
     if (useLocalVideoForIdle) {

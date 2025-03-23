@@ -59,9 +59,8 @@ const Chat: React.FC<ChatProps> = () => {
   const localVideoRef = useRef<HTMLDivElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement>(null);
   const userMessageRef = useRef<HTMLTextAreaElement>(null);
-  
-  let avatarSynthesizer: SpeechSDK.AvatarSynthesizer | undefined;
-  let speechRecognizer: SpeechSDK.SpeechRecognizer | undefined;
+  const avatarSynthesizerRef = useRef<SpeechSDK.AvatarSynthesizer | null>(null);
+  const speechRecognizerRef = useRef<SpeechSDK.SpeechRecognizer | null>(null);
 
   useEffect(() => {
     const intervalId = setInterval(() => {
@@ -141,7 +140,7 @@ const Chat: React.FC<ChatProps> = () => {
       }
 
       // Make avatar speak the response
-      if (avatarSynthesizer) {
+      if (avatarSynthesizerRef.current) {
         setIsSpeaking(true);
         const ssml = `
           <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US">
@@ -153,7 +152,7 @@ const Chat: React.FC<ChatProps> = () => {
           </speak>`;
 
         try {
-          await avatarSynthesizer.speakSsmlAsync(ssml);
+          await avatarSynthesizerRef.current.speakSsmlAsync(ssml);
           setIsSpeaking(false);
           setLastSpeakTime(new Date());
         } catch (error) {
@@ -168,23 +167,23 @@ const Chat: React.FC<ChatProps> = () => {
   };
 
   const disconnectAvatar = () => {
-    if (avatarSynthesizer) {
-      avatarSynthesizer.close();
-      avatarSynthesizer = undefined;
+    if (avatarSynthesizerRef.current) {
+      avatarSynthesizerRef.current.close();
+      avatarSynthesizerRef.current = null;
     }
-    if (speechRecognizer) {
-      speechRecognizer.close();
-      speechRecognizer = undefined;
+    if (speechRecognizerRef.current) {
+      speechRecognizerRef.current.close();
+      speechRecognizerRef.current = null;
     }
     setSessionActive(false);
   };
 
   const handleMicrophoneClick = () => {
-    if (!speechRecognizer) return;
+    if (!speechRecognizerRef.current) return;
     
     if (microphoneText === 'Stop Microphone') {
       setIsMicrophoneDisabled(true);
-      speechRecognizer.stopContinuousRecognitionAsync(
+      speechRecognizerRef.current.stopContinuousRecognitionAsync(
         () => {
           setMicrophoneText('Start Microphone');
           setIsMicrophoneDisabled(false);
@@ -210,15 +209,15 @@ const Chat: React.FC<ChatProps> = () => {
 
     setIsMicrophoneDisabled(true);
     
-    speechRecognizer.recognized = async (s: any, e: SpeechSDK.SpeechRecognitionEventArgs) => {
+    speechRecognizerRef.current.recognized = async (s: any, e: SpeechSDK.SpeechRecognitionEventArgs) => {
       if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
         let userQuery = e.result.text.trim();
         if (userQuery === '') return;
 
         if (!continuousConversation) {
           setIsMicrophoneDisabled(true);
-          if (speechRecognizer) {
-            speechRecognizer.stopContinuousRecognitionAsync(
+          if (speechRecognizerRef.current) {
+            speechRecognizerRef.current.stopContinuousRecognitionAsync(
               () => {
                 setMicrophoneText('Start Microphone');
                 setIsMicrophoneDisabled(false);
@@ -235,7 +234,7 @@ const Chat: React.FC<ChatProps> = () => {
       }
     };
 
-    speechRecognizer.startContinuousRecognitionAsync(
+    speechRecognizerRef.current.startContinuousRecognitionAsync(
       () => {
         setMicrophoneText('Stop Microphone');
         setIsMicrophoneDisabled(false);
@@ -305,13 +304,13 @@ const Chat: React.FC<ChatProps> = () => {
     const avatarConfig = new SpeechSDK.AvatarConfig(
       talkingAvatarCharacter,
       talkingAvatarStyle,
-      SpeechSDK.AvatarVideoFormat.WebM
+      "H264" as unknown as SpeechSDK.AvatarVideoFormat
     );
     avatarConfig.customized = customizedAvatar;
 
-    avatarSynthesizer = new SpeechSDK.AvatarSynthesizer(speechSynthesisConfig, avatarConfig);
+    avatarSynthesizerRef.current = new SpeechSDK.AvatarSynthesizer(speechSynthesisConfig, avatarConfig);
 
-    avatarSynthesizer.avatarEventReceived = (s: any, e: SpeechSDK.AvatarEventArgs) => {
+    avatarSynthesizerRef.current.avatarEventReceived = (s: any, e: SpeechSDK.AvatarEventArgs) => {
       console.log(`Event received: ${e.description}`);
     };
 
@@ -319,7 +318,7 @@ const Chat: React.FC<ChatProps> = () => {
     speechRecognitionConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
 
     const autoDetectSourceLanguageConfig = SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages(sttLocales.split(','));
-    speechRecognizer = SpeechSDK.SpeechRecognizer.FromConfig(speechRecognitionConfig, autoDetectSourceLanguageConfig, SpeechSDK.AudioConfig.fromDefaultMicrophoneInput());
+    speechRecognizerRef.current = SpeechSDK.SpeechRecognizer.FromConfig(speechRecognitionConfig, autoDetectSourceLanguageConfig, SpeechSDK.AudioConfig.fromDefaultMicrophoneInput());
 
     fetchWebRTCToken();
   };
@@ -354,7 +353,7 @@ const Chat: React.FC<ChatProps> = () => {
     peerConnection.addTransceiver('video', { direction: 'sendrecv' });
     peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
 
-    avatarSynthesizer?.startAvatarAsync(peerConnection).then((result) => {
+    avatarSynthesizerRef.current?.startAvatarAsync(peerConnection).then((result) => {
       if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
         console.log(`Avatar started. Result ID: ${result.resultId}`);
       } else {
@@ -376,7 +375,7 @@ const Chat: React.FC<ChatProps> = () => {
   };
 
   const stopSpeaking = (): void => {
-    avatarSynthesizer?.stopSpeakingAsync().then(() => {
+    avatarSynthesizerRef.current?.stopSpeakingAsync().then(() => {
       setIsSpeaking(false);
     });
   };
@@ -387,10 +386,10 @@ const Chat: React.FC<ChatProps> = () => {
   };
 
   const stopSession = (): void => {
-    if (avatarSynthesizer) avatarSynthesizer.close();
-    if (speechRecognizer) {
-      speechRecognizer.stopContinuousRecognitionAsync(() => {
-        if (speechRecognizer) speechRecognizer.close();
+    if (avatarSynthesizerRef.current) avatarSynthesizerRef.current.close();
+    if (speechRecognizerRef.current) {
+      speechRecognizerRef.current.stopContinuousRecognitionAsync(() => {
+        if (speechRecognizerRef.current) speechRecognizerRef.current.close();
       });
     }
 

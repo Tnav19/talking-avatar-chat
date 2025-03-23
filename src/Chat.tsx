@@ -84,6 +84,11 @@ const Chat: React.FC<ChatProps> = () => {
       return;
     }
 
+    // Stop any ongoing speech before processing new query
+    if (isSpeaking) {
+      await stopSpeaking();
+    }
+
     // Add user message to chat
     const userMessage: ChatMessage = {
       role: 'user',
@@ -145,6 +150,10 @@ const Chat: React.FC<ChatProps> = () => {
 
       // Make avatar speak the response
       if (avatarSynthesizerRef.current) {
+        // Clear any previous speech queue
+        setSpokenTextQueue([]);
+        setSpeakingText("");
+        
         setIsSpeaking(true);
         const ssml = `
           <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US">
@@ -296,7 +305,14 @@ const Chat: React.FC<ChatProps> = () => {
     if (e.key === 'Enter') {
       const userQuery = e.currentTarget.value;
       if (userQuery !== '') {
-        handleUserQuery(userQuery.trim(), "", imgUrl);
+        // Stop any ongoing speech before sending new message
+        if (isSpeaking) {
+          stopSpeaking().then(() => {
+            handleUserQuery(userQuery.trim(), "", imgUrl);
+          });
+        } else {
+          handleUserQuery(userQuery.trim(), "", imgUrl);
+        }
         setUserMessage('');
         setImgUrl("");
       }
@@ -558,25 +574,110 @@ const Chat: React.FC<ChatProps> = () => {
       setSpeakingText("");
       // Clear the queue when stopping
       setSpokenTextQueue([]);
+      // Reset last speak time
+      setLastSpeakTime(new Date());
     } catch (error) {
       console.error('Error stopping speech:', error);
+      // Even if there's an error, reset the states
+      setIsSpeaking(false);
+      setSpeakingText("");
+      setSpokenTextQueue([]);
     }
   };
 
   const startSession = (): void => {
+    // Reset session states before starting
+    setUserClosedSession(false);
+    setShowRemoteVideo(true);
+    setShowLocalVideo(false);
+    
+    // Ensure video container is visible and empty
+    const remoteVideo = document.getElementById('remoteVideo');
+    if (remoteVideo) {
+      remoteVideo.style.display = 'block';
+      while (remoteVideo.firstChild) {
+        remoteVideo.removeChild(remoteVideo.firstChild);
+      }
+    }
+
     connectAvatar();
     setSessionActive(true);
   };
 
   const stopSession = (): void => {
-    if (avatarSynthesizerRef.current) avatarSynthesizerRef.current.close();
-    if (speechRecognizerRef.current) {
-      speechRecognizerRef.current.stopContinuousRecognitionAsync(() => {
-        if (speechRecognizerRef.current) speechRecognizerRef.current.close();
+    // Stop any ongoing speech
+    if (avatarSynthesizerRef.current) {
+      avatarSynthesizerRef.current.stopSpeakingAsync().then(() => {
+        avatarSynthesizerRef.current?.close();
       });
     }
 
+    // Stop and close speech recognizer
+    if (speechRecognizerRef.current) {
+      speechRecognizerRef.current.stopContinuousRecognitionAsync(() => {
+        if (speechRecognizerRef.current) {
+          speechRecognizerRef.current.close();
+        }
+      });
+    }
+
+    // Clear video elements and hide containers
+    const remoteVideo = document.getElementById('remoteVideo');
+    if (remoteVideo) {
+      // Stop all media tracks
+      const videos = remoteVideo.getElementsByTagName('video');
+      const audios = remoteVideo.getElementsByTagName('audio');
+      
+      Array.from(videos).forEach(video => {
+        const stream = (video as HTMLVideoElement).srcObject as MediaStream;
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+        }
+        video.srcObject = null;
+      });
+
+      Array.from(audios).forEach(audio => {
+        const stream = (audio as HTMLAudioElement).srcObject as MediaStream;
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+        }
+        audio.srcObject = null;
+      });
+
+      // Remove elements
+      while (remoteVideo.firstChild) {
+        remoteVideo.removeChild(remoteVideo.firstChild);
+      }
+      
+      // Hide the container
+      remoteVideo.style.display = 'none';
+    }
+
+    // Clear chat history
+    if (chatHistoryRef.current) {
+      chatHistoryRef.current.innerHTML = '';
+    }
+
+    // Reset all states
     setSessionActive(false);
+    setShowRemoteVideo(false);
+    setShowLocalVideo(false);
+    setIsSpeaking(false);
+    setSpeakingText("");
+    setSpokenTextQueue([]);
+    setUserMessage("");
+    setCurrentRecognizedText("");
+    setMessages([]);
+    setMicrophoneText("Start Microphone");
+    setIsMicrophoneDisabled(false);
+    setShowTypeMessage(false);
+    setUserClosedSession(true);
+    setIsReconnecting(false);
+    setLastSpeakTime(undefined);
+
+    // Reset refs
+    avatarSynthesizerRef.current = null;
+    speechRecognizerRef.current = null;
   };
 
   const clearChatHistory = () => {

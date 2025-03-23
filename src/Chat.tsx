@@ -11,6 +11,12 @@ import { CheckedState } from "@radix-ui/react-checkbox";
 
 interface ChatProps {}
 
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
 const Chat: React.FC<ChatProps> = () => {
 
   const [region, setRegion] = useState<string>('westus2');
@@ -44,6 +50,8 @@ const Chat: React.FC<ChatProps> = () => {
   const [showImageUpload, setShowImageUpload] = useState<boolean>(false);
   const [showLocalVideo, setShowLocalVideo] = useState<boolean>(false);
   const [showRemoteVideo, setShowRemoteVideo] = useState<boolean>(true);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [systemPrompt, setSystemPrompt] = useState<string>("You are an AI assistant that helps people find information.");
   
   // Refs
   const chatHistoryRef = useRef<HTMLDivElement>(null);
@@ -68,8 +76,95 @@ const Chat: React.FC<ChatProps> = () => {
   };
 
   const handleUserQuery = async (userQuery: string, userQueryHTML: string, imgUrl: string) => {
-    // Implementation for handling user queries
-    console.log("Handling user query:", userQuery);
+    if (!azureOpenAIEndpoint || !azureOpenAIApiKey || !azureOpenAIDeploymentName) {
+      alert('Please fill in all Azure OpenAI configuration fields.');
+      return;
+    }
+
+    // Add user message to chat
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: userQuery,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, userMessage]);
+
+    try {
+      // Call Azure OpenAI API
+      const response = await fetch(`${azureOpenAIEndpoint}/openai/deployments/${azureOpenAIDeploymentName}/chat/completions?api-version=2023-05-15`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': azureOpenAIApiKey
+        },
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages.map(msg => ({ role: msg.role, content: msg.content })),
+            { role: 'user', content: userQuery }
+          ],
+          max_tokens: 800,
+          temperature: 0.7,
+          top_p: 0.95,
+          frequency_penalty: 0,
+          presence_penalty: 0
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response from OpenAI');
+      }
+
+      const data = await response.json();
+      const assistantMessage = data.choices[0].message.content;
+
+      // Add assistant message to chat
+      const assistantChatMessage: ChatMessage = {
+        role: 'assistant',
+        content: assistantMessage,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, assistantChatMessage]);
+
+      // Update chat history display
+      if (chatHistoryRef.current) {
+        const userDiv = document.createElement('div');
+        userDiv.className = 'mb-4 text-right';
+        userDiv.innerHTML = `<div class="inline-block bg-blue-100 dark:bg-blue-900 rounded-lg px-4 py-2">${userQuery}</div>`;
+        chatHistoryRef.current.appendChild(userDiv);
+
+        const assistantDiv = document.createElement('div');
+        assistantDiv.className = 'mb-4';
+        assistantDiv.innerHTML = `<div class="inline-block bg-gray-100 dark:bg-gray-800 rounded-lg px-4 py-2">${assistantMessage}</div>`;
+        chatHistoryRef.current.appendChild(assistantDiv);
+        chatHistoryRef.current.scrollTop = chatHistoryRef.current.scrollHeight;
+      }
+
+      // Make avatar speak the response
+      if (avatarSynthesizer) {
+        setIsSpeaking(true);
+        const ssml = `
+          <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US">
+            <voice name="${ttsVoice}">
+              <mstts:express-as style="chat">
+                ${assistantMessage.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+              </mstts:express-as>
+            </voice>
+          </speak>`;
+
+        try {
+          await avatarSynthesizer.speakSsmlAsync(ssml);
+          setIsSpeaking(false);
+          setLastSpeakTime(new Date());
+        } catch (error) {
+          console.error('Error speaking:', error);
+          setIsSpeaking(false);
+        }
+      }
+    } catch (error) {
+      console.error('Error handling user query:', error);
+      alert('Failed to get response from OpenAI. Please check your configuration.');
+    }
   };
 
   const disconnectAvatar = () => {
@@ -122,16 +217,18 @@ const Chat: React.FC<ChatProps> = () => {
 
         if (!continuousConversation) {
           setIsMicrophoneDisabled(true);
-          speechRecognizer.stopContinuousRecognitionAsync(
-            () => {
-              setMicrophoneText('Start Microphone');
-              setIsMicrophoneDisabled(false);
-            },
-            (err) => {
-              console.log("Failed to stop continuous recognition:", err);
-              setIsMicrophoneDisabled(false);
-            }
-          );
+          if (speechRecognizer) {
+            speechRecognizer.stopContinuousRecognitionAsync(
+              () => {
+                setMicrophoneText('Start Microphone');
+                setIsMicrophoneDisabled(false);
+              },
+              (err) => {
+                console.log("Failed to stop continuous recognition:", err);
+                setIsMicrophoneDisabled(false);
+              }
+            );
+          }
         }
 
         handleUserQuery(userQuery, "", "");
@@ -200,7 +297,7 @@ const Chat: React.FC<ChatProps> = () => {
     }
     
     const speechSynthesisConfig = privateEndpointEnabled
-      ? SpeechSDK.SpeechConfig.fromEndpoint(new URL(`wss://${privateEndpoint}/tts/cognitiveservices/websocket/v1?enableTalkingAvatar=true`), apiKey)
+      ? SpeechSDK.SpeechConfig.fromEndpoint(new URL(`wss://${privateEndpoint}tts/cognitiveservices/websocket/v1?enableTalkingAvatar=true`), apiKey)
       : SpeechSDK.SpeechConfig.fromSubscription(apiKey, region);
 
     speechSynthesisConfig.endpointId = customVoiceEndpointId;
@@ -404,8 +501,8 @@ const Chat: React.FC<ChatProps> = () => {
               <div className="input-group">
                 <Label>System Prompt:</Label>
                 <Textarea
-                  id="prompt"
-                  value="You are an AI assistant that helps people find information."
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
                   placeholder="Enter your system prompt"
                 />
               </div>

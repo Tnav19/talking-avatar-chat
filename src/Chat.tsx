@@ -19,13 +19,13 @@ interface ChatMessage {
 
 const Chat: React.FC<ChatProps> = () => {
 
-  const [region, setRegion] = useState<string>('westus2');
+  const [region, setRegion] = useState<string>('eastus2');
   const [apiKey, setApiKey] = useState<string>('');
   const [privateEndpointEnabled, setPrivateEndpointEnabled] = useState<boolean>(false);
   const [privateEndpoint, setPrivateEndpoint] = useState<string>('');
-  const [azureOpenAIEndpoint, setAzureOpenAIEndpoint] = useState<string>('');
+  const [azureOpenAIEndpoint, setAzureOpenAIEndpoint] = useState<string>('https://openai-dewiride-interview-test.openai.azure.com/');
   const [azureOpenAIApiKey, setAzureOpenAIApiKey] = useState<string>('');
-  const [azureOpenAIDeploymentName, setAzureOpenAIDeploymentName] = useState<string>('');
+  const [azureOpenAIDeploymentName, setAzureOpenAIDeploymentName] = useState<string>('gpt-4o-mini');
   const [sessionActive, setSessionActive] = useState<boolean>(false);
   const [sttLocales, setSttLocales] = useState<string>('en-US,de-DE,es-ES,fr-FR,it-IT,ja-JP,ko-KR,zh-CN');
   const [ttsVoice, setTtsVoice] = useState<string>('en-US-AvaMultilingualNeural');
@@ -474,64 +474,114 @@ const Chat: React.FC<ChatProps> = () => {
     }
   };
 
-  const setupWebRTC = (iceServerUrl: string, iceServerUsername: string, iceServerCredential: string): void => {
-    const peerConnection = new RTCPeerConnection({
-      iceServers: [{ urls: [iceServerUrl], username: iceServerUsername, credential: iceServerCredential }],
-    });
+  
 
-    peerConnection.ontrack = handleVideoTrack;
-
-    // Listen to data channel, to get the event from the server
-    peerConnection.addEventListener("datachannel", (event) => {
-      const dataChannel = event.channel;
-      dataChannel.onmessage = (e) => {
-        const webRTCEvent = JSON.parse(e.data);
-        if (webRTCEvent.event.eventType === 'EVENT_TYPE_TURN_START' && showSubtitles) {
-          // Handle subtitles
-          const subtitles = document.getElementById('subtitles');
-          if (subtitles) {
-            subtitles.hidden = false;
-            // We should maintain speaking text state if needed
-            // subtitles.innerHTML = speakingText;
-          }
-        } else if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END' || webRTCEvent.event.eventType === 'EVENT_TYPE_SWITCH_TO_IDLE') {
-          const subtitles = document.getElementById('subtitles');
-          if (subtitles) {
-            subtitles.hidden = true;
-          }
-          
-          if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END') {
-            if (autoReconnectAvatar && !userClosedSession && !isReconnecting) {
-              // Session disconnected unexpectedly, need reconnect
-              console.log(`[${new Date().toISOString()}] The WebSockets got disconnected, need reconnect.`);
-              setIsReconnecting(true);
-
-              // Release the existing avatar connection
-              if (avatarSynthesizerRef.current) {
-                avatarSynthesizerRef.current.close();
-              }
-
-              // Setup a new avatar connection
-              connectAvatar();
-            }
-          }
-        }
-
-        console.log(`[${new Date().toISOString()}] WebRTC event received: ${e.data}`);
-      };
-    });
-
-    peerConnection.addTransceiver('video', { direction: 'sendrecv' });
-    peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
-
-    avatarSynthesizerRef.current?.startAvatarAsync(peerConnection).then((result) => {
-      if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-        console.log(`Avatar started. Result ID: ${result.resultId}`);
-      } else {
-        console.error(`Error starting avatar: ${result.resultId}`);
-      }
-    });
-  };
+  const setupWebRTC = (
+   iceServerUrl: string, 
+   iceServerUsername: string, 
+   iceServerCredential: string
+ ): void => {
+   
+   const useTcpForWebRTC = false;
+   let peerConnection = createPeerConnection(useTcpForWebRTC);
+ 
+   // Function to create peer connection with optional TCP fallback
+   function createPeerConnection(useTcp: boolean): RTCPeerConnection {
+     return new RTCPeerConnection({
+       iceServers: [{
+         urls: [useTcp ? iceServerUrl.replace(':3478', ':443?transport=tcp') : iceServerUrl],
+         username: iceServerUsername,
+         credential: iceServerCredential
+       }],
+       iceTransportPolicy: useTcp ? 'relay' : 'all'
+     });
+   }
+ 
+   // Function to retry with TCP ICE servers if the connection fails
+   function retryWithTcpIceServers() {
+     // Close the old peer connection
+     peerConnection.close();
+ 
+     // Create a new peer connection using TCP ICE servers
+     peerConnection = createPeerConnection(true);
+ 
+     setupPeerConnectionListeners(); // Re-setup the listeners for the new connection
+ 
+     // Restart the avatar synthesizer connection
+     avatarSynthesizerRef.current?.startAvatarAsync(peerConnection).then((result) => {
+       if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+         console.log(`Avatar started. Result ID: ${result.resultId}`);
+       } else {
+         console.error(`Error starting avatar: ${result.resultId}`);
+       }
+     });
+   }
+ 
+   // Set up the event listeners for the peer connection
+   function setupPeerConnectionListeners() {
+     peerConnection.ontrack = handleVideoTrack;
+ 
+     // Listen to data channel, to get the event from the server
+     peerConnection.addEventListener("datachannel", (event) => {
+       const dataChannel = event.channel;
+       dataChannel.onmessage = (e) => {
+         const webRTCEvent = JSON.parse(e.data);
+         if (webRTCEvent.event.eventType === 'EVENT_TYPE_TURN_START' && showSubtitles) {
+           // Handle subtitles
+           const subtitles = document.getElementById('subtitles');
+           if (subtitles) {
+             subtitles.hidden = false;
+           }
+         } else if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END' || webRTCEvent.event.eventType === 'EVENT_TYPE_SWITCH_TO_IDLE') {
+           const subtitles = document.getElementById('subtitles');
+           if (subtitles) {
+             subtitles.hidden = true;
+           }
+           
+           if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END') {
+             if (autoReconnectAvatar && !userClosedSession && !isReconnecting) {
+               console.log(`[${new Date().toISOString()}] The WebSockets got disconnected, need reconnect.`);
+               setIsReconnecting(true);
+ 
+               // Release the existing avatar connection
+               if (avatarSynthesizerRef.current) {
+                 avatarSynthesizerRef.current.close();
+               }
+ 
+               // Setup a new avatar connection
+               connectAvatar();
+             }
+           }
+         }
+ 
+         console.log(`[${new Date().toISOString()}] WebRTC event received: ${e.data}`);
+       };
+     });
+ 
+     peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+     peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+ 
+     // Listen for connection state changes to handle failures
+     peerConnection.addEventListener('connectionstatechange', () => {
+       if (peerConnection.connectionState === 'failed') {
+         console.log('PeerConnection failed. Retrying with different ICE servers...');
+         retryWithTcpIceServers();
+       }
+     });
+   }
+ 
+   // Initialize peer connection listeners and start the avatar session
+   setupPeerConnectionListeners();
+ 
+   avatarSynthesizerRef.current?.startAvatarAsync(peerConnection).then((result) => {
+     if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+       console.log(`Avatar started. Result ID: ${result.resultId}`);
+     } else {
+       console.error(`Error starting avatar: ${result.resultId}`);
+     }
+   });
+ };
+ 
 
   const speakNext = async (text: string, index: number = 0, isReconnect: boolean = false) => {
     if (!avatarSynthesizerRef.current) return;
